@@ -64,12 +64,3 @@ data <- GDCprepare(query = query)
 matrix <- assay(data, "unstranded")
 ```
 
-
-https://bioconductor.org/packages/release/bioc/vignettes/TCGAbiolinks/inst/doc/download_prepare.html
-
-https://bioconductor.org/packages/release/bioc/vignettes/TCGAbiolinks/inst/doc/query.html
-
-https://www.youtube.com/watch?v=UWXv9dUpxNE
-
-WATCH NEXT:
-https://www.youtube.com/watch?v=DnygUTAZFmM
