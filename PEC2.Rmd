@@ -1,0 +1,76 @@
+---
+title: "TFM"
+author: "Carmen Robinson Pastor"
+date: "2023-04-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#Download TCGAbiolinks
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("TCGAbiolinks")
+```
+
+```{r}
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+```
+
+To see that the type of data that we're interested in analysing is available:
+
+```{r}
+#Obtain a summary of the chosen project
+getProjectSummary("TCGA-LAML")
+```
+
+```{r}
+#basic query to obtain the data from the chosen project
+basic_query <- GDCquery( project = "TCGA-LAML",
+  data.category = "Transcriptome Profiling")
+
+output_query <- getResults(basic_query)
+```
+
+
+```{r}
+#obtain data applying filters to the query to obtain only the data of interest
+query <- GDCquery(
+  project = "TCGA-LAML",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  access = "open",
+  experimental.strategy = "RNA-Seq",
+)
+
+
+GDCdownload(
+  query = query, 
+  method = "api", 
+  files.per.chunk = 6
+)
+
+
+data <- GDCprepare(query = query)
+```
+
+```{r}
+#initial data exploration
+
+#the columns represent the samples, the rows represent the genes
+matrix <- assay(data, "unstranded")
+
+dim(matrix) #we have 60660 genes of 151 samples
+
+#example of column data
+colData(data)[1:5,]
+
+#example of row data
+rowRanges(data)[1:5,]
+```
+
