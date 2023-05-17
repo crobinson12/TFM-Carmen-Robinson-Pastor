@@ -1,0 +1,251 @@
+---
+title: "TFM"
+author: "Carmen Robinson Pastor"
+date: "2023-04-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+#Download Bioconductor packages required for the execution of the code
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("TCGAbiolinks")
+BiocManager::install("DESeq2")
+BiocManager::install("ComplexHeatmap")
+BiocManager::install("org.Hs.eg.db")
+BiocManager::install("AnnotationDbi")
+```
+
+```{r, warning=FALSE, message=FALSE}
+#Load packages needed for the execution of the code
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+library(DESeq2)
+library(stringr)
+library(tidyverse)
+library(ggplot2)
+library(ComplexHeatmap)
+library("org.Hs.eg.db")
+library(AnnotationDbi)
+library(RColorBrewer)
+library(ggrepel)
+```
+
+
+```{r}
+#Obtain a summary of the chosen project
+getProjectSummary("TCGA-LAML")
+```
+
+```{r}
+#Basic query to obtain the data from the chosen project
+basic_query <- GDCquery( project = "TCGA-LAML",
+  data.category = "Transcriptome Profiling")
+
+output_query <- getResults(basic_query)
+```
+
+
+```{r}
+#Obtain data applying filters to the query to obtain only the data of interest
+query <- GDCquery(
+  project = "TCGA-LAML",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  access = "open",
+  experimental.strategy = "RNA-Seq",
+)
+
+
+GDCdownload(
+  query = query, 
+  method = "api", 
+  files.per.chunk = 6
+)
+
+
+data <- GDCprepare(query = query)
+```
+
+```{r}
+#Initial data exploration
+
+#The columns represent the samples, the rows represent the genes
+matrix <- assay(data) #this is our counts data
+
+dim(matrix) #we have 60660 genes of 151 samples
+
+#example of column data
+#colData(data)[1:5,]
+
+#example of row data
+#rowRanges(data)[1:5,]
+```
+
+```{r}
+#Get the data from our data source
+sample_info<- as.data.frame(colData(data))
+sample_info<- sample_info[,c(3,36)]
+write.table(sample_info, file = "sample_info.csv", sep = ',', col.names = T, row.names = T, quote = F)
+```
+
+
+```{r}
+##Prepare count data
+#Read in counts data
+#head(matrix)
+
+#Read in column data
+colData <- read.csv('sample_info.csv')
+
+#Make sure the row names in colData match the column names in counts_data
+all(colnames(matrix) %in% rownames(colData))
+
+#Check if they are in the same order
+all(colnames(matrix) == rownames(colData))
+```
+
+```{r}
+## Construct a DESeqDataSet object
+dds<- DESeqDataSetFromMatrix(countData = matrix, colData = colData, design = ~vital_status)
+
+
+#Pre-filtering of the data
+#Remove rows with low gene counts: keep rows that have at least 10 reads 
+keep<- rowSums(counts(dds)) >= 10 #gives logical values indicating whether the rows meet the criteria
+#keep #all of them meet the criteria
+#dds <- dds[,keep] #keeps the ones that meet the criteria
+
+#Set the factor level: set 'Alive' as out reference level
+dds$vital_status <- relevel(dds$vital_status, ref= "Alive")
+```
+
+```{r}
+##Run DESeq
+deseq <- DESeq(dds)
+
+#Save the results
+res<- results(deseq)
+res
+
+#Explore results
+summary(res) #p-value cut off is 0.1 by default
+
+#Change p-value cut off
+res0.05<- results(deseq, alpha=0.05)
+summary(res0.05) #1.1% are upregulated, 0.8% are downregulated
+```
+
+```{r}
+#MA plot
+plotMA(res) #dots in blue are significantly differentially expressed genes (padj<0.05)
+```
+
+```{r}
+#Prepare data to make a heatmap
+res0.05.df<- as.data.frame(res0.05)
+res0.05.df_full <- as.data.frame(res0.05)
+
+
+#we have many genes, we need to add some filtering
+res0.05.df<- res0.05.df[(res0.05.df$baseMean > 100)&
+                                    (abs(res0.05.df$log2FoldChange) > 1.5),]
+
+res0.05.df #We have reduced the number of rows to 53
+columns(org.Hs.eg.db)
+
+#Map gene simbols to gene names
+#Row names are in the form of gene annotations, which aren't what we want to see
+#in our heatmap; gene annotations need to be converted to Ensembl IDs.
+
+#first, convert the rownames to a column : https://stackoverflow.com/questions/56610413/how-do-i-rename-the-column-0-in-a-dataframe
+res0.05.df_v<-tibble::rownames_to_column(res0.05.df, "IDs")
+
+#edit the column (remove ENSEMBL ID version numbers): https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6844140/
+res0.05.df_v$IDs <- gsub("\\.[0-9]*", "", res0.05.df_v$IDs) 
+
+# https://www.youtube.com/watch?v=S2_FTg9kaZU
+res0.05.df_v<- res0.05.df_v %>% remove_rownames %>% column_to_rownames(var= "IDs")
+
+res0.05.df_v$symbol <- mapIds(org.Hs.eg.db, keys= rownames(res0.05.df_v), keytype= "ENSEMBL", column="SYMBOL")
+
+#matrix of count values
+mat <- counts(deseq, normalized=T)[rownames(res0.05.df),]
+
+mat_df<- as.data.frame(mat)
+mat_df_v<-tibble::rownames_to_column(mat_df, "IDs")
+mat_df_v$IDs <- gsub("\\.[0-9]*", "", mat_df_v$IDs)
+mat_df_v<- mat_df_v %>% remove_rownames %>% column_to_rownames(var= "IDs")
+
+#matrix of z score values
+mat.z <- t(apply(mat_df_v, 1, scale))
+
+#re-name column names
+colnames(mat.z) <- rownames(colData)
+```
+
+```{r}
+#Make the heatmap 
+#Heatmap(mat.z, cluster_rows = T, cluster_columns = T, column_labels = colnames(mat.z), 
+#        name= "Z-score", row_labels= res0.05.df_v[rownames(mat.z)]$symbol)
+```
+
+```{r}
+#Create a volcano plot using the differential gene expression analysis 
+#https://www.youtube.com/watch?v=sIRnaKo1aKE
+res0.05.df_full_m <- tibble::rownames_to_column(res0.05.df_full, "IDs")
+res0.05.df_full_m$IDs <- gsub("\\.[0-9]*", "", res0.05.df_full_m$IDs) 
+res0.05.df_full_m<- res0.05.df_full_m %>% remove_rownames %>% column_to_rownames(var= "IDs")
+
+res0.05.df_full_m$IDs <- mapIds(org.Hs.eg.db, keys= rownames(res0.05.df_full_m), keytype= "ENSEMBL", column = "SYMBOL")
+
+
+#add a column that indicates whether the genes are up or down regulated
+res0.05.df_full_m$diffexpressed <- 'NO'
+res0.05.df_full_m$diffexpressed[res0.05.df_full_m$log2FoldChange > 0.6 & 
+                                res0.05.df_full_m$pvalue < 0.05] <- 'UP'
+res0.05.df_full_m$diffexpressed[res0.05.df_full_m$log2FoldChange < -0.6 & 
+                                res0.05.df_full_m$pvalue < 0.05] <- 'DOWN'
+
+ 
+#find the top 20 differentially expressed genes
+top20degs <- head(res0.05.df_full_m[order(res0.05.df_full_m$pvalue), 'IDs'], 20)
+top20degs
+
+#add a column
+#if gene symbol (ID) is in the top 20 differentially expressed genes, assign it the symbol,
+#if not, assign NA
+res0.05.df_full_m$delabel <- ifelse(res0.05.df_full_m$IDs %in% top20degs, res0.05.df_full_m$IDs, NA) 
+
+#set a theme for the plot
+#mirar un poco esto a ver si cambio alguna cosa
+theme_set(theme_classic(base_size = 20) +
+            theme(axis.title.y = element_text(face = "bold", 
+                                              margin = margin(0,20,0,0), 
+                                              size = rel(1.1), color = 'black'),
+              axis.title.x = element_text(hjust = 0.5, face = "bold", 
+                                          margin = margin(20,0,0,0), 
+                                          size = rel(1.1), color = 'black'),
+              plot.title = element_text(hjust = 0.5)
+            ))
+
+
+ggplot(data=res0.05.df_full_m, aes(x = log2FoldChange, y = -log10(pvalue), col= diffexpressed, label= delabel)) + 
+  geom_vline(xintercept = c(-0.6, 0.6), col= 'gray', linetype= 'dashed') + #este threshold lo tengo que decidir
+  geom_hline(yintercept = c(0.05), col= 'gray', linetype= 'dashed') +
+  geom_point(size=2) +
+  scale_color_manual(values = c("#00AFBB", "grey", "#bb0c00"), #set the colours of our variable
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + #set labels
+  coord_cartesian(ylim=c(0, 20), xlim=c(-5, 5)) +
+  scale_x_continuous(breaks = seq(-5, 5, 1)) + #breaks in the x axis
+  labs(color= 'Diff. expressed genes', #legend title
+       x=expression("log"[2]*"FoldChange"), y=expression("-log"[10]*"p-value"))+
+  ggtitle("Gene expression in alive vs dead AML patients") + #plot title
+  geom_text_repel(max.overlaps = Inf)
+  
+```
